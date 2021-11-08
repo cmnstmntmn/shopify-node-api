@@ -11,19 +11,8 @@ type WebhookHandlerFunction = (
 ) => Promise<void>;
 
 export interface RegisterOptions {
-  // See https://shopify.dev/docs/admin-api/graphql/reference/events/webhooksubscriptiontopic for available topics
-  topic: string;
-  path: string;
   shop: string;
   accessToken: string;
-  deliveryMethod?: DeliveryMethod;
-}
-
-export interface ShortenedRegisterOptions {
-  // See https://shopify.dev/docs/admin-api/graphql/reference/events/webhooksubscriptiontopic for available topics
-  shop: string;
-  accessToken: string;
-  deliveryMethod?: DeliveryMethod;
 }
 
 export interface RegisterReturn {
@@ -36,6 +25,12 @@ export interface RegisterReturn {
 export interface WebhookRegistryEntry {
   path: string;
   webhookHandler: WebhookHandlerFunction;
+  deliveryMethod?: DeliveryMethod;
+}
+
+export interface WebhookRegistry {
+  // See https://shopify.dev/docs/admin-api/graphql/reference/events/webhooksubscriptiontopic for available topics
+  [topic: string]: WebhookRegistryEntry;
 }
 
 interface WebhookCheckResponseNode<

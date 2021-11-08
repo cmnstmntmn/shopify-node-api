@@ -13,59 +13,18 @@ import {
   DeliveryMethod,
   RegisterOptions,
   RegisterReturn,
-  WebhookRegistryEntry,
   WebhookCheckResponse,
   WebhookCheckResponseLegacy,
-  ShortenedRegisterOptions,
 } from './types';
 
-interface AddHandlersProps {
-  [topic: string]: WebhookRegistryEntry;
-}
-
 interface RegistryInterface {
-  webhookRegistry: {[topic: string]: WebhookRegistryEntry;};
 
   /**
-   * Sets the handler for the given topic. If a handler was previously set for the same topic, it will be overridden.
+   * Registers the Webhooks provided in the Context WEBHOOKS_REGISTRY
    *
-   * @param topic String used to add a handler
-   * @param options Paramters to add a handler which are path and webHookHandler
-   */
-  addHandler(topic: string, options: WebhookRegistryEntry): void;
-
-  /**
-   * Sets a list of handlers for the given topics using the `addHandler` function
-   *
-   * @param handlers Object in format {topic: WebhookRegistryEntry}
-   */
-  addHandlers(handlers: AddHandlersProps): void;
-
-  /**
-   * Fetches the handler for the given topic. Returns null if no handler was registered.
-   *
-   * @param topic The topic to check
-   */
-  getHandler(topic: string): WebhookRegistryEntry | null;
-
-  /**
-   * Gets all topics
-   */
-  getTopics(): string[];
-
-  /**
-   * Registers a Webhook Handler function for a given topic.
-   *
-   * @param options Parameters to register a handler, including topic, listening address, delivery method
+   * @param options Parameters to register the Webhooks, including shop, accessToken
    */
   register(options: RegisterOptions): Promise<RegisterReturn>;
-
-  /**
-   * Registers multiple Webhook Handler functions.
-   *
-   * @param options Parameters to register a handler, including topic, listening address, delivery method
-   */
-  registerAll(options: ShortenedRegisterOptions): Promise<RegisterReturn>;
 
   /**
    * Processes the webhook request received from the Shopify API
@@ -240,106 +199,62 @@ function buildQuery(
   `;
 }
 
+const MANDATORY_WEBHOOKS = ['CUSTOMERS_DATA_REQUEST', 'CUSTOMERS_REDACT', 'SHOP_REDACT'];
+
 const WebhooksRegistry: RegistryInterface = {
-  webhookRegistry: {},
-
-  addHandler(topic: string, {path, webhookHandler}: WebhookRegistryEntry): void {
-    WebhooksRegistry.webhookRegistry[topic] = {path, webhookHandler};
-  },
-
-  addHandlers(handlers: AddHandlersProps): void {
-    for (const topic in handlers) {
-      if ({}.hasOwnProperty.call(handlers, topic)) {
-        WebhooksRegistry.addHandler(topic, handlers[topic]);
-      }
-    }
-  },
-
-  getHandler(topic: string): WebhookRegistryEntry | null {
-    return topic in WebhooksRegistry.webhookRegistry ? WebhooksRegistry.webhookRegistry[topic] : null;
-  },
-
-  getTopics(): string[] {
-    return Object.keys(WebhooksRegistry.webhookRegistry);
-  },
-
   async register({
-    path,
-    topic,
     accessToken,
     shop,
-    deliveryMethod = DeliveryMethod.Http,
   }: RegisterOptions): Promise<RegisterReturn> {
-    const registerReturn: RegisterReturn = {};
-    validateDeliveryMethod(deliveryMethod);
     const client = new GraphqlClient(shop, accessToken);
-    const address =
-      deliveryMethod === DeliveryMethod.Http
-        ? `https://${Context.HOST_NAME}${path}`
-        : path;
-    const checkResult = (await client.query({
-      data: buildCheckQuery(topic),
-    })) as {body: WebhookCheckResponse | WebhookCheckResponseLegacy;};
-    let webhookId: string | undefined;
-    let mustRegister = true;
-    if (checkResult.body.data.webhookSubscriptions.edges.length) {
-      const {node} = checkResult.body.data.webhookSubscriptions.edges[0];
-      let endpointAddress = '';
-      if ('endpoint' in node) {
-        if (node.endpoint.__typename === 'WebhookHttpEndpoint') {
-          endpointAddress = node.endpoint.callbackUrl;
-        } else if (node.endpoint.__typename === 'WebhookEventBridgeEndpoint') {
-          endpointAddress = node.endpoint.arn;
-        }
-      } else {
-        endpointAddress = node.callbackUrl;
-      }
-      webhookId = node.id;
-      if (endpointAddress === address) {
-        mustRegister = false;
-      }
-    }
-
-    if (mustRegister) {
-      const result = await client.query({
-        data: buildQuery(topic, address, deliveryMethod, webhookId),
-      });
-      registerReturn[topic] = {
-        success: isSuccess(result.body, deliveryMethod, webhookId),
-        result: result.body,
-      };
-    } else {
-      registerReturn[topic] = {
-        success: true,
-        result: {},
-      };
-    }
-    return registerReturn;
-  },
-
-  async registerAll({
-    accessToken,
-    shop,
-    deliveryMethod = DeliveryMethod.Http,
-  }: ShortenedRegisterOptions): Promise<RegisterReturn> {
-    let registerReturn = {};
-    const topics = WebhooksRegistry.getTopics();
+    const topics = Object.keys(Context.WEBHOOKS_REGISTRY).filter((topic) => !MANDATORY_WEBHOOKS.includes(topic));
+    const registerReturn: RegisterReturn = {};
 
     for (const topic of topics) {
-      const handler = WebhooksRegistry.getHandler(topic);
-      if (handler) {
-        const {path} = handler;
-        const webhook: RegisterOptions = {
-          path,
-          topic,
-          accessToken,
-          shop,
-          deliveryMethod,
-        };
-        const returnedRegister: RegisterReturn = await WebhooksRegistry.register(webhook);
-        registerReturn = {...registerReturn, ...returnedRegister};
+      const {path, deliveryMethod = DeliveryMethod.Http} = Context.WEBHOOKS_REGISTRY[topic];
+      const address = deliveryMethod === DeliveryMethod.Http
+        ? `https://${Context.HOST_NAME}${path}`
+        : path;
+      const checkResult = (await client.query({
+        data: buildCheckQuery(topic),
+      })) as {body: WebhookCheckResponse | WebhookCheckResponseLegacy;};
+      let webhookId: string | undefined;
+      let mustRegister = true;
+      if (checkResult.body.data.webhookSubscriptions.edges.length) {
+        const {node} = checkResult.body.data.webhookSubscriptions.edges[0];
+        let endpointAddress = '';
+        if ('endpoint' in node) {
+          if (node.endpoint.__typename === 'WebhookHttpEndpoint') {
+            endpointAddress = node.endpoint.callbackUrl;
+          } else if (node.endpoint.__typename === 'WebhookEventBridgeEndpoint') {
+            endpointAddress = node.endpoint.arn;
+          }
+        } else {
+          endpointAddress = node.callbackUrl;
+        }
+        webhookId = node.id;
+        if (endpointAddress === address) {
+          mustRegister = false;
+        }
       }
+
+      let success: boolean;
+      let body: unknown;
+      if (mustRegister) {
+        const result = await client.query({
+          data: buildQuery(topic, address, deliveryMethod, webhookId),
+        });
+
+        success = isSuccess(result.body, deliveryMethod, webhookId);
+        body = result.body;
+      } else {
+        success = true;
+        body = {};
+      }
+
+      registerReturn[topic] = {success, result: body};
     }
+
     return registerReturn;
   },
 
@@ -415,7 +330,7 @@ const WebhooksRegistry: RegistryInterface = {
 
         if (ShopifyUtilities.safeCompare(generatedHash, hmac as string)) {
           const graphqlTopic = (topic as string).toUpperCase().replace(/\//g, '_');
-          const webhookEntry = WebhooksRegistry.getHandler(graphqlTopic);
+          const webhookEntry = Context.WEBHOOKS_REGISTRY[graphqlTopic];
 
           if (webhookEntry) {
             try {
@@ -456,8 +371,8 @@ const WebhooksRegistry: RegistryInterface = {
   },
 
   isWebhookPath(path: string): boolean {
-    for (const key in WebhooksRegistry.webhookRegistry) {
-      if (WebhooksRegistry.webhookRegistry[key].path === path) {
+    for (const topic in Context.WEBHOOKS_REGISTRY) {
+      if (Context.WEBHOOKS_REGISTRY[topic].path === path) {
         return true;
       }
     }
